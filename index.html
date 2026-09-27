@@ -96,8 +96,9 @@ input[type=range]{flex:1;accent-color:var(--vermilion);min-height:32px}
 #chapters.on{display:flex}
 #chapters button{min-height:36px;padding:0 10px;font-size:13.5px;background:var(--chrome-3)}
 #chapters .lbl{width:100%;font-size:12.5px;color:var(--chrome-dim);margin:0 0 2px}
-#saveLink{display:block;text-align:center;text-decoration:none;background:var(--vermilion);color:#fff;font-weight:600;border-radius:10px;padding:13px;margin-bottom:14px}
-#saveLink:active{background:#8E2C21}
+#shareBtn{display:block;width:100%;background:var(--vermilion);color:#fff;font-weight:600;margin-bottom:10px;min-height:48px}
+#shareBtn:active{background:#8E2C21}
+#openLink,#saveLink{display:block;text-align:center;text-decoration:none;background:var(--chrome-3);color:var(--chrome-text);border-radius:10px;padding:13px;margin-bottom:10px}
 #imgOut{width:100%;height:auto;border-radius:8px;margin-bottom:14px;background:#EFE7D5;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto}
 .foot{font-size:12px;color:var(--chrome-dim);text-align:center;margin-top:14px}
 .foot a{color:var(--chrome-dim)}
@@ -250,7 +251,9 @@ input[type=range]{flex:1;accent-color:var(--vermilion);min-height:32px}
   <div class="modal-card">
     <p id="imgTip"></p>
     <img id="imgOut" alt="這一頁的描寫">
-    <a id="saveLink" download>下載檔案</a>
+    <button id="shareBtn">儲存到檔案或相簿</button>
+    <a id="openLink" target="_blank" rel="noopener">在新分頁開啟</a>
+    <a id="saveLink" download>直接下載到電腦</a>
     <div class="acts"><button id="imgClose">關閉</button></div>
   </div>
 </div>
@@ -520,12 +523,16 @@ function eraseAt(e){
 /* ---------- 匯出 ---------- */
 // iOS Safari 會擋掉程式自己觸發的下載，所以改成把檔案放進視窗裡，
 // 由使用者親手點一下連結，這樣才算是真的操作。
-let blobURL=null;
-function deliver(filename,blob,previewSrc,tip){
+let blobURL=null,pendingFile=null;
+function deliver(filename,blob,previewSrc,tip,mime){
   if(blobURL)URL.revokeObjectURL(blobURL);
   blobURL=URL.createObjectURL(blob);
-  const a=$("#saveLink");
-  a.href=blobURL;a.download=filename;a.textContent="下載 "+filename;
+  try{pendingFile=new File([blob],filename,{type:mime});}catch(e){pendingFile=null;}
+  const a=$("#saveLink");a.href=blobURL;a.download=filename;
+  const o=$("#openLink");o.href=blobURL;
+  // iPhone / iPad 走系統的分享面板才存得進檔案或相簿
+  const canShare=!!(pendingFile&&navigator.canShare&&navigator.canShare({files:[pendingFile]}));
+  $("#shareBtn").style.display=canShare?"block":"none";
   const img=$("#imgOut");
   if(previewSrc){img.src=previewSrc;img.style.display="block";}
   else{img.removeAttribute("src");img.style.display="none";}
@@ -546,7 +553,7 @@ async function exportPNG(){
   const blob=await new Promise(r=>c.toBlob(r,"image/png"));
   if(!blob){toast("圖片做不出來");return;}
   deliver("描帖-第"+(page+1)+"頁.png",blob,c.toDataURL("image/png"),
-    "點下面的連結下載，或長按圖片選「加入照片」存到相簿。");
+    "在 iPad 上按第一個按鈕，選「儲存影像」或「儲存到檔案」。也可以長按上面的圖片選「加入照片」。","image/png");
 }
 function loadScript(src){
   return new Promise((res,rej)=>{
@@ -577,7 +584,7 @@ async function exportPDF(){
       doc.addImage(c.toDataURL("image/png"),"PNG",0,0,210,297);
     }
     deliver("描帖-A4練習本.pdf",doc.output("blob"),null,
-      "共 "+total+" 頁，點下面的連結下載。");
+      "共 "+total+" 頁。在 iPad 上按第一個按鈕，選「儲存到檔案」。","application/pdf");
   }catch(e){
     toast("PDF 沒做成功，可能是網路擋掉了外部程式庫");
   }finally{btn.disabled=false;btn.textContent="下載 A4 練習本 PDF";}
@@ -600,7 +607,12 @@ let modalResolve=null;
 function ask(msg){$("#modalText").textContent=msg;$("#modal").classList.add("on");return new Promise(r=>modalResolve=r);}
 $("#modalYes").onclick=()=>{$("#modal").classList.remove("on");modalResolve&&modalResolve(true);};
 $("#modalNo").onclick=()=>{$("#modal").classList.remove("on");modalResolve&&modalResolve(false);};
-$("#imgClose").onclick=()=>{$("#imgModal").classList.remove("on");if(blobURL){URL.revokeObjectURL(blobURL);blobURL=null;}};
+$("#imgClose").onclick=()=>{$("#imgModal").classList.remove("on");if(blobURL){URL.revokeObjectURL(blobURL);blobURL=null;}pendingFile=null;};
+$("#shareBtn").onclick=async()=>{
+  if(!pendingFile)return;
+  try{await navigator.share({files:[pendingFile]});}
+  catch(e){if(e&&e.name!=="AbortError")toast("系統擋下了這次儲存，改用「在新分頁開啟」再從分享鍵存檔");}
+};
 
 async function changeLayout(fn){
   if(hasInk()){
