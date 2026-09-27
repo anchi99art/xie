@@ -80,6 +80,7 @@ button:disabled{opacity:.35}
 textarea{width:100%;min-height:140px;resize:vertical;background:#1A1712;color:var(--chrome-text);border:1px solid var(--chrome-3);border-radius:10px;padding:10px;font:15px/1.7 "Songti TC","PingFang TC",serif;-webkit-user-select:text;user-select:text}
 .row{display:flex;align-items:center;gap:10px;margin-top:8px}
 .row label{font-size:14px;color:var(--chrome-dim);flex:0 0 auto}
+#pdfFrom,#pdfTo{flex:1;min-width:0;background:#1A1712;color:var(--chrome-text);border:1px solid var(--chrome-3);border-radius:8px;padding:9px;font:15px/1 inherit;-webkit-user-select:text;user-select:text}
 input[type=range]{flex:1;accent-color:var(--vermilion);min-height:32px}
 .val{font-size:13px;color:var(--chrome-dim);font-variant-numeric:tabular-nums;min-width:38px;text-align:right}
 .switch{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px;font-size:14px}
@@ -218,7 +219,15 @@ input[type=range]{flex:1;accent-color:var(--vermilion);min-height:32px}
         <button data-set="pdfSize" data-v="mid">每頁 88 字</button>
         <button data-set="pdfSize" data-v="small">每頁 140 字</button>
       </div>
-      <div class="seg"><button id="pdf">下載 A4 練習本 PDF</button></div>
+      <div class="row">
+        <label for="pdfFrom">從第</label>
+        <input type="number" id="pdfFrom" min="1" inputmode="numeric">
+        <label for="pdfTo">頁到</label>
+        <input type="number" id="pdfTo" min="1" inputmode="numeric">
+        <label>頁</label>
+      </div>
+      <p class="note" id="pdfInfo" style="margin-top:6px"></p>
+      <div class="seg" style="margin-top:8px"><button id="pdf">下載 A4 練習本 PDF</button></div>
       <div class="seg" style="margin-top:6px"><button id="export">存成圖片（含筆跡）</button></div>
       <p class="note">PDF 是空白的描紅本，印出來可以用筆寫。圖片存的是目前這一頁，包含寫上去的字。</p>
     </div>
@@ -531,8 +540,11 @@ function deliver(filename,blob,previewSrc,tip,mime){
   const a=$("#saveLink");a.href=blobURL;a.download=filename;
   const o=$("#openLink");o.href=blobURL;
   // iPhone / iPad 走系統的分享面板才存得進檔案或相簿
+  // 有系統分享面板就只留那一個按鈕，另外兩個在 iPad 上本來就不會有反應
   const canShare=!!(pendingFile&&navigator.canShare&&navigator.canShare({files:[pendingFile]}));
   $("#shareBtn").style.display=canShare?"block":"none";
+  o.style.display=canShare?"none":"block";
+  a.style.display=canShare?"none":"block";
   const img=$("#imgOut");
   if(previewSrc){img.src=previewSrc;img.style.display="block";}
   else{img.removeAttribute("src");img.style.display="none";}
@@ -553,7 +565,7 @@ async function exportPNG(){
   const blob=await new Promise(r=>c.toBlob(r,"image/png"));
   if(!blob){toast("圖片做不出來");return;}
   deliver("描帖-第"+(page+1)+"頁.png",blob,c.toDataURL("image/png"),
-    "在 iPad 上按第一個按鈕，選「儲存影像」或「儲存到檔案」。也可以長按上面的圖片選「加入照片」。","image/png");
+    "按下面的按鈕，選「儲存影像」存到相簿，或「儲存到檔案」。也可以長按上面的圖片選「加入照片」。","image/png");
 }
 function loadScript(src){
   return new Promise((res,rej)=>{
@@ -561,33 +573,65 @@ function loadScript(src){
     document.head.appendChild(s);
   });
 }
+const PDF_MAX=60;
+function pdfPages(){
+  const L=PDF_LAYOUTS[S.pdfSize];
+  return Math.max(1,Math.ceil(chars.length/(L.cols*L.rows)));
+}
+function syncPdf(){
+  const total=pdfPages();
+  const f=$("#pdfFrom"),t=$("#pdfTo");
+  f.max=total;t.max=total;
+  if(!f.value||+f.value<1||+f.value>total)f.value=1;
+  if(!t.value||+t.value<1||+t.value>total)t.value=Math.min(total,20);
+  $("#pdfInfo").textContent="這篇在目前的設定下共 "+total+" 頁，一次最多匯出 "+PDF_MAX+" 頁。";
+}
 async function exportPDF(){
-  const btn=$("#pdf");btn.disabled=true;btn.textContent="製作中…";
+  const btn=$("#pdf");
+  const total=pdfPages();
+  let from=Math.max(1,Math.min(total,parseInt($("#pdfFrom").value,10)||1));
+  let to=Math.max(from,Math.min(total,parseInt($("#pdfTo").value,10)||from));
+  if(to-from+1>PDF_MAX){
+    to=from+PDF_MAX-1;
+    $("#pdfTo").value=to;
+    toast("一次最多 "+PDF_MAX+" 頁，已改成第 "+from+" 到 "+to+" 頁");
+  }
+  const count=to-from+1;
+  btn.disabled=true;
   try{
     if(!(window.jspdf&&window.jspdf.jsPDF))
       await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  }catch(e){
+    btn.disabled=false;btn.textContent="下載 A4 練習本 PDF";
+    toast("載不到製作 PDF 的程式庫，可能是網路擋住了");return;
+  }
+  try{
     const {jsPDF}=window.jspdf;
-    const L=Object.assign({},PDF_LAYOUTS[S.pdfSize]);
+    const L=PDF_LAYOUTS[S.pdfSize];
     const W=1240,H=1754,gw=L.cols*L.cell,gh=L.rows*L.cell;
     const ox=Math.round((W-gw)/2),oy=Math.round((H-gh)/2)-20;
-    const per=L.cols*L.rows,total=Math.max(1,Math.ceil(chars.length/per));
     const doc=new jsPDF({orientation:"p",unit:"mm",format:"a4"});
     const c=document.createElement("canvas");c.width=W;c.height=H;
     const x=c.getContext("2d");
-    for(let p=0;p<total;p++){
+    for(let i=0;i<count;i++){
+      const p=from-1+i;
+      btn.textContent="製作中 "+(i+1)+" / "+count;
+      await new Promise(r=>setTimeout(r,0));   // 讓畫面喘口氣，iPad 才不會卡死
       x.clearRect(0,0,W,H);
       paintSheet(x,L,p,{fill:"#FFFFFF",fillW:W,fillH:H,ox:ox,oy:oy});
       x.fillStyle="rgba(40,36,32,.45)";x.font='22px '+FACES.hei;
       x.textAlign="left";x.textBaseline="alphabetic";x.fillText("anchi99.com",ox,H-70);
       x.textAlign="right";x.fillText((p+1)+" / "+total,ox+gw,H-70);
-      if(p>0)doc.addPage();
-      doc.addImage(c.toDataURL("image/png"),"PNG",0,0,210,297);
+      if(i>0)doc.addPage();
+      doc.addImage(c.toDataURL("image/jpeg",0.9),"JPEG",0,0,210,297);
     }
-    deliver("描帖-A4練習本.pdf",doc.output("blob"),null,
-      "共 "+total+" 頁。在 iPad 上按第一個按鈕，選「儲存到檔案」。","application/pdf");
+    deliver("描帖-第"+from+"到"+to+"頁.pdf",doc.output("blob"),null,
+      "共 "+count+" 頁。按下面的按鈕，選「儲存到檔案」。","application/pdf");
   }catch(e){
-    toast("PDF 沒做成功，可能是網路擋掉了外部程式庫");
-  }finally{btn.disabled=false;btn.textContent="下載 A4 練習本 PDF";}
+    toast("PDF 做到一半失敗了，把頁數範圍縮小一點再試");
+  }finally{
+    btn.disabled=false;btn.textContent="下載 A4 練習本 PDF";
+  }
 }
 
 /* ---------- UI ---------- */
@@ -601,6 +645,7 @@ function syncButtons(){
   $("#fade").value=S.fade;$("#fadeVal").textContent=S.fade+"%";
   $("#width").value=S.width;$("#widthVal").textContent=S.width;
   $("#text").value=S.text;
+  syncPdf();
 }
 const hasInk=()=>Object.keys(ink).some(k=>ink[k]&&ink[k].length);
 let modalResolve=null;
@@ -628,7 +673,9 @@ document.querySelectorAll("[data-set]").forEach(b=>{
     const k=b.dataset.set;let v=b.dataset.v;
     if(k==="cell")v=parseInt(v,10);
     if(k==="dir"||k==="cell"){changeLayout(()=>{S[k]=v;});return;}
-    S[k]=v;render();syncButtons();save();
+    S[k]=v;
+    if(k==="pdfSize"){$("#pdfFrom").value="";$("#pdfTo").value="";}
+    render();syncButtons();save();
   });
 });
 document.querySelectorAll("[data-preset]").forEach(b=>{
